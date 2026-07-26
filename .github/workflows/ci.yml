@@ -1,0 +1,60 @@
+name: CI Re-training
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/telco-churn-model
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MLProject
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install mlflow==2.19.0 scikit-learn pandas numpy
+
+      - name: Run MLflow Project
+        run: mlflow run . --env-manager=local
+
+      - name: Ambil run_id terakhir
+        run: |
+          RUN_ID=$(python -c "import mlflow; print(mlflow.search_runs(search_all_experiments=True).iloc[0].run_id)")
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+          echo "Run ID: $RUN_ID"
+
+      - name: Upload artefak model ke GitHub (skilled)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-model-artifacts
+          path: MLProject/mlruns/
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image (mlflow build-docker)
+        run: |
+          mlflow models build-docker \
+            --model-uri "runs:/${{ env.RUN_ID }}/model" \
+            --name "${{ env.IMAGE_NAME }}"
+
+      - name: Push ke Docker Hub
+        run: |
+          docker tag ${{ env.IMAGE_NAME }} ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:latest
